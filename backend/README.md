@@ -53,6 +53,9 @@ app/core/config.py     Settings
 - Bot 文本中的普通提及不创建任务；只有 `delegate_to_bot` 会创建子任务。
 - 每个房间一个 FIFO Worker，同一房间的 Agent 任务串行执行。
 - 模型配置存于 `llm_settings` 单行表；`GET/PUT /api/settings/llm` 修改后，新任务立即使用新配置，无需重启。
+- `ModelConfigService` 缓存配置；直接改数据库不会让运行中的进程感知，需通过 API/界面更新或重启。
+- `LLM_*` 环境变量只在首次建库、`llm_settings` 表为空时作为种子；之后修改 `.env` 不会覆盖数据库配置。
+- API Key 以明文存于 `llm_settings`，接口只返回是否设置和末四位提示；设置接口没有认证，Base URL 可指向任意 `http(s)` 地址，部署时必须保护访问。
 - 启动时把中断的 `running` 任务/Run 标记失败，并重新入队 `queued` 任务。
 - 调度器和 WebSocket Hub 在进程内，只能运行一个后端进程。
 - 没有认证；所有请求都以预设用户身份执行。
@@ -65,7 +68,7 @@ uv run ruff format --check .
 uv run python -m pytest
 ```
 
-测试使用 `tests/fakes.py` 的脚本化 LLM，不访问网络，也不需要 API Key。每个测试使用临时 SQLite 数据库。
+测试使用 `tests/fakes.py` 的脚本化 LLM，不访问网络，也不需要 API Key。每个测试使用临时 SQLite 数据库。`tests/test_model_settings.py` 覆盖模型配置的读取、热更新、持久化和 Key 不回显。
 
 ## 修改指南
 

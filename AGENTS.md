@@ -41,7 +41,8 @@ frontend/
     api.ts            带类型的 REST 客户端
     types.ts          API/领域类型（与 schemas.py 手工保持同步）
     useRoomSocket.ts  自动重连的房间 Socket
-    components/       Sidebar、ChatPanel、Composer、Inspector、Avatar
+    components/       Sidebar、ChatPanel、Composer、Inspector、ModelSettings、Avatar
+    i18n.tsx           中英文文案与语言状态
     App.css           全部应用样式
 ```
 
@@ -107,7 +108,7 @@ Windows 也可以双击 `start.cmd`。脚本会检查 Docker、按需创建 `bac
 | Compose 日志 | `docker compose logs -f` | 仓库根目录 |
 | Compose 停止 | `docker compose down` | 仓库根目录 |
 
-修改 `backend/.env` 后执行 `docker compose up -d`；`docker compose restart` 不会重新加载 `env_file`。
+修改 `backend/.env` 后执行 `docker compose up -d`；`docker compose restart` 不会重新加载 `env_file`。**例外：** `LLM_PROVIDER` / `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` 只在首次建库时作为种子；模型配置请在界面 **Model settings** 或 `PUT /api/settings/llm` 修改，立即生效，不需要重启。
 
 `pytest` 配置了 `asyncio_mode = "auto"`，异步测试不需要额外装饰器。
 
@@ -151,6 +152,17 @@ Windows 也可以双击 `start.cmd`。脚本会检查 Docker、按需创建 `bac
 
 工具会收到带当前 `AsyncSession`、房间、Bot、任务、配置和 ChatService 的 `ToolContext`。不要在工具里另开 Session；使用传入的 Session，保证任务状态一致。
 
+### 修改模型配置或设置页
+
+- 模型连接配置存在 `llm_settings` 单行表（`id=1`），通过 `ModelConfigService` 读取和缓存；更新时必须同时写数据库和替换 `_config` 缓存，保证新任务立即生效。
+- `LLM_*` 环境变量只在 `init_db` 首次创建 `LLMSetting` 行时作为种子；已有行时不要用环境变量覆盖数据库配置。
+- `GET /api/settings/llm` 只暴露 `api_key_set` / `api_key_hint`，绝不能返回原始 Key；`PUT` 的 `api_key` 为空表示保留，`clear_api_key=true` 才清除。
+- 运行中的任务在开始时取配置快照；修改只影响之后创建的任务。不要把配置读取放进每次 LLM 调用，否则会改变现有语义。
+- API Key 以明文存储在 SQLite，接口没有认证；新增设置时保持这一安全边界在文档中可见，不要假设有多用户权限。
+- 前端修改涉及 `ModelSettings.tsx`、`api.ts`、`types.ts` 和 `i18n.tsx` 的中英文文案。
+- 测试参考 `tests/test_model_settings.py`：初始值、热更新后新任务使用新配置、Key 不回显、持久化、清除 Key、非法 Base URL。
+- 同步更新 `README.md` 的配置/API/安全章节和 `DEPLOYMENT.md` 的模型配置章节。
+
 ### 修改 Agent 循环或 Prompt
 
 - `context.py` 负责 System Prompt 和对话记录预算。每条记录截断到 2,000 字符；`AGENT_MAX_CONTEXT_CHARS` 只约束对话记录。
@@ -193,6 +205,7 @@ Windows 也可以双击 `start.cmd`。脚本会检查 Docker、按需创建 `bac
 - `/api`、`/ws`、`/docs`、`/openapi.json` 的代理在 `frontend/nginx.conf`。新增后端顶层路径时同步更新。
 - Compose 健康检查固定访问 `/api/health`。修改 `API_PREFIX` 时必须同步修改 `docker-compose.yml`，否则前端不会启动。
 - Compose 通过 `env_file` 读取 `backend/.env`，并覆盖 `DATABASE_URL`、`DATA_DIR` 指向 `/app/data`。不要把密钥写入镜像或 Compose 文件。
+- 模型配置存在命名卷里的 `llm_settings` 表；`LLM_*` 只是首次播种。修改模型设置不要通过重建容器或改 Compose 环境变量期待生效。
 - 后端固定单 Worker、非 root 用户。若修改用户或数据目录，确认命名卷可写。
 - `start.ps1`、`start.sh` 和 `start.cmd` 的逻辑要保持一致：检查 Docker、按需创建 env、构建启动、轮询健康检查、打印 URL。修改端口变量或健康检查时三处一起改。
 - 修改依赖后先更新 `uv.lock` / `package-lock.json`，再重新构建镜像。
@@ -229,6 +242,7 @@ Windows 也可以双击 `start.cmd`。脚本会检查 Docker、按需创建 `bac
 - `app_client` 会启动完整 lifespan，包括调度器。用 `wait_for_task` 等待终态，不要固定 sleep。
 - 使用 `settings` fixture 提供的临时 SQLite，不要碰 `backend/data/app.db`。
 - 覆盖可观察行为：任务/消息顺序、提及路由、委派限制、工具持久化、取消、重启恢复和错误路径。
+- 模型配置改动要验证：环境变量首次播种、热更新后新任务使用新配置、Key 不回显、持久化、清除 Key、非法 Base URL。
 - 前端没有单元测试框架。UI 改动要连接运行中的后端在浏览器验证，并运行 `npm run lint` 和 `npm run build`。
 
 ## 常见陷阱
@@ -244,6 +258,10 @@ Windows 也可以双击 `start.cmd`。脚本会检查 Docker、按需创建 `bac
 - `fetch_url` 在每次重定向时都会检查地址，但无法完全防御 DNS Rebinding。修改时保留私网/保留地址检查。
 - 服务运行时删除数据库会让内存调度状态失效。先停止服务。
 - 界面中的消息历史有上限；数据库保留全部行。
+- `LLM_*` 只在首次建库时作为种子；数据库已有 `llm_settings` 行时，改 `.env` 不会改变模型配置，也不会热更新。
+- 模型配置在任务开始时取快照；修改只影响之后创建的任务，运行中的任务继续使用旧 Key/模型/Base URL。
+- API Key 明文存在 `llm_settings` 表，备份也会带走；`PUT /api/settings/llm` 没有认证，Base URL 可指向任意 `http(s)` 地址，必须保护页面/API 访问。
+- `ModelConfigService` 缓存配置；直接改数据库不会让运行中的进程感知，必须通过界面/API 更新，或重启服务。
 - Docker 模式下的 SQLite 在命名卷 `backend-data`，不是宿主机的 `backend/data/`。重置使用 `docker compose down -v`，这会同时删除数据库。
 - `docker compose restart backend` 不会重新加载 `backend/.env`；使用 `docker compose up -d` 重建容器。
 - 后端端口没有发布到宿主机，浏览器统一访问 8080；不要在前端里写死 `127.0.0.1:8000`。
@@ -257,3 +275,4 @@ Windows 也可以双击 `start.cmd`。脚本会检查 Docker、按需创建 `bac
 - Docker/Compose（如有改动）：`docker compose config --quiet` 通过；引擎可用时执行一次 `docker compose up -d --build` 并验证 `/api/health`。
 - 调用方、Schema、前端类型、测试和文档同步更新。
 - 不提交密钥、生成的数据库、构建产物或 `node_modules`。
+- 日志、错误消息和 API 响应中不得出现原始 API Key。

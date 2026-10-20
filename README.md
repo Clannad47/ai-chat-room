@@ -13,7 +13,7 @@
 相关文档：
 
 - [`AGENTS.md`](AGENTS.md) —— 贡献者与编码 Agent 指南：命令、架构约束、修改流程、测试要求
-- [`DEPLOYMENT.md`](DEPLOYMENT.md) —— 生产部署：服务器准备、TLS、备份、升级、回滚、监控
+- [`DEPLOYMENT.md`](DEPLOYMENT.md) —— 最简部署：一键启动、模型配置、备份与升级
 - [`backend/README.md`](backend/README.md) —— 后端速查
 - [`frontend/README.md`](frontend/README.md) —— 前端速查
 
@@ -153,7 +153,7 @@ MVP 以**单进程**运行：调度器和 WebSocket 广播都在内存中。不�
 - [uv](https://docs.astral.sh/uv/)
 - Python 3.12（也可以让 uv 安装）
 - Node.js 20.19+ 或 22.12+
-- 一个 OpenAI 兼容的 Chat Completions 接口和 API Key
+- 一个 OpenAI 兼容的 Chat Completions 接口和 API Key（也可以在首次启动后通过界面 **Model settings** 配置）
 
 ### 启动后端
 
@@ -199,16 +199,17 @@ npm run dev
 
 ### 初次使用
 
-1. 在右侧 **Agents** 面板创建一个 Bot。
-2. 在左侧创建一个房间，并勾选该 Bot。
-3. 在输入框发送 `@BotName 你好`。
-4. 观察 Bot 消息出现，然后在 **Tasks** 中查看任务详情。
+1. 点击左下角的 **Model settings**，填写 Provider、API Key、Base URL 和默认模型并保存（如果已通过 `LLM_*` 播种可跳过）。
+2. 在右侧 **Agents** 面板创建一个 Bot。
+3. 在左侧创建一个房间，并勾选该 Bot。
+4. 在输入框发送 `@BotName 你好`。
+5. 观察 Bot 消息出现，然后在 **Tasks** 中查看任务详情。
 
 从房间的 **Agents** 面板创建 Bot 时，前端会顺手把它加入当前房间；通过 REST API 创建的 Bot 需要单独加入房间。
 
 ### 重置开发数据
 
-先停止后端，再删除 `backend/data/app.db`（以及可能存在的 `-wal` / `-shm` 文件）。下次启动会创建空表并重新写入预设用户。项目没有迁移机制。
+先停止后端，再删除 `backend/data/app.db`（以及可能存在的 `-wal` / `-shm` 文件）。下次启动会创建空表、重新写入预设用户，并用当前 `LLM_*` 环境变量重新播种模型配置。已通过界面保存的模型配置和 API Key 也会一并清空。
 
 ## Docker Compose 一键启动
 
@@ -281,7 +282,7 @@ docker compose logs -f
 docker compose down
 ```
 
-修改 `backend/.env` 后，需要让容器重新读取环境变量：
+修改 `backend/.env` 中的**非模型配置**后，需要让容器重新读取环境变量：
 
 ```bash
 docker compose up -d
@@ -289,13 +290,17 @@ docker compose up -d
 
 仅执行 `docker compose restart backend` 不会重新加载 `env_file`。
 
+模型连接配置（Provider、Base URL、API Key、默认模型）不走这条路径：它保存在数据库的 `llm_settings` 表中，通过界面 **Model settings** 或 `PUT /api/settings/llm` 修改后立即对后续任务生效，无需重启或重建容器。`LLM_*` 环境变量只在首次建库时作为种子值，之后修改不会覆盖数据库配置。
+
 ### 数据与重置
 
-SQLite 数据保存在命名卷 `backend-data`，挂载到容器的 `/app/data`。`docker compose down` 会保留数据；删除数据卷会清空数据库：
+SQLite 数据保存在命名卷 `backend-data`，挂载到容器的 `/app/data`。`docker compose down` 会保留数据；删除数据卷会清空数据库，包括房间、消息、任务以及界面中保存的模型配置和 API Key：
 
 ```bash
 docker compose down -v
 ```
+
+删除后下次启动会用 `backend/.env` 中的 `LLM_*` 重新播种模型配置。
 
 ### 注意
 
@@ -304,7 +309,7 @@ docker compose down -v
 - 修改前端或后端代码后重新执行启动脚本，或 `docker compose up -d --build`。
 - 如果 8080 被占用，使用 `-Port` / 端口参数或修改 `APP_PORT`。
 
-生产环境（TLS、访问控制、备份、升级、回滚）请按 [`DEPLOYMENT.md`](DEPLOYMENT.md) 执行；生产不要使用默认 Compose 的 `0.0.0.0:8080` 绑定。
+更完整的部署、备份和升级说明见 [`DEPLOYMENT.md`](DEPLOYMENT.md)。默认 Compose 会把 `8080` 绑定到 `0.0.0.0`；公网部署必须自行加 TLS 和访问控制。
 
 ## 配置
 
@@ -343,7 +348,7 @@ docker compose down -v
 CORS_ORIGINS=["http://localhost:5173","http://127.0.0.1:5173"]
 ```
 
-项目使用 `LLM_*` 而不是 `OPENAI_*`，避免宿主机上的 `OPENAI_API_KEY` 静默覆盖项目 `.env`。如果通过环境变量注入配置，请设置 `LLM_*` 名称。
+项目使用 `LLM_*` 而不是 `OPENAI_*`，避免宿主机上的 `OPENAI_API_KEY` 静默覆盖项目 `.env`。如果通过环境变量注入模型配置，请设置 `LLM_*` 名称；这些值只用于首次建库播种，后续变更请在 **Model settings** 中完成。
 
 Bot 的 `model` 可以为空，此时使用界面中配置的默认模型。有效步数上限为 `min(bot.max_steps, AGENT_MAX_STEPS)`。
 
@@ -356,6 +361,23 @@ Bot 的 `model` 可以为空，此时使用界面中配置的默认模型。有�
 - **右侧：** **Agents** 与 **Tasks** 两个标签页。窄屏时左右面板变成抽屉。
 
 界面跟随操作系统的浅色/深色偏好，没有单独的主题切换按钮。
+
+### 模型设置
+
+模型连接配置不需要改 `.env`，也不需要重启：
+
+1. 点击左下角的设置按钮（**Model settings**）。
+2. 填写 Provider、默认模型、Base URL 和 API Key。
+3. 保存后，**之后创建的任务**立即使用新配置；正在运行的任务继续使用启动时的快照。
+
+说明：
+
+- 默认模型只用于没有设置模型覆盖的 Bot；Bot 自己的 `model` 优先。
+- API Key 留空表示保留已保存的值；勾选“移除”会清空。
+- 原始 API Key 不会返回浏览器，只显示末四位提示。
+- 配置保存在 SQLite 的 `llm_settings` 表中，容器重建不会丢失；删除数据库会清空，并在下次启动时用 `LLM_*` 重新播种。
+- `LLM_*` 环境变量只在首次建库时作为种子，之后修改不会覆盖页面配置。
+- 模型设置没有独立权限；Base URL 可指向任意 `http(s)` 地址，能访问页面的人即可改写配置。公网部署必须加认证或限制访问。
 
 ### Bot
 
@@ -497,7 +519,7 @@ Socket 断开后，客户端最多重试六次，使用指数退避（500 ms 起
 }
 ```
 
-`api_key` 省略或留空表示保留已保存的 Key；`clear_api_key: true` 会删除它。响应永不包含原始 Key，只包含 `api_key_set` 和 `api_key_hint`。`base_url` 必须为 `http(s)` URL，留空表示使用 Provider 默认地址。
+`api_key` 省略或留空表示保留已保存的 Key；`clear_api_key: true` 会删除它。响应永不包含原始 Key，只包含 `api_key_set` 和 `api_key_hint`。`base_url` 必须为 `http(s)` URL，留空表示使用 Provider 默认地址。`provider` 目前只支持 `openai`，`model` 不能为空。
 
 `BotCreate`：
 
@@ -720,7 +742,8 @@ Prompt 构建细节：
 
 - **没有认证。** 每个请求和 WebSocket 连接都以预设用户身份执行。不要把部署暴露到不可信网络。
 - **除房间成员关系外没有授权。** Bot 所有权只用于列出/创建 Bot；实际只有一个用户。
-- API Key 只保存在服务端，不会发送给模型。它以明文存储在 SQLite 的 `llm_settings` 表中；API 只返回末四位提示，但没有磁盘加密或访问审计。
+- **模型设置没有独立权限。** API Key 只保存在服务端，不会返回浏览器，但会以明文存储在 SQLite 的 `llm_settings` 表中，并发送到当前配置的 Base URL。`PUT /api/settings/llm` 没有认证，且 Base URL 允许任意 `http(s)` 地址；任何能访问应用的人都能改写模型配置，甚至把 Key 指向自己的服务。公网部署必须在反向代理层加认证或限制访问。
+- API Key 没有磁盘加密、访问审计或单独的权限控制；备份和数据库文件都应按密钥对待。
 - Bot 有工具白名单，但工具权限没有按房间或用户隔离。
 - `fetch_url` 会拦截非 HTTP 协议、私网/回环/链路本地/保留地址，并对重定向重新检查，但无法完全防御 DNS Rebinding。
 - Bot 会读取房间内容，因此存在 Prompt 注入风险。工具结果和对话记录都是未受信任输入。
@@ -767,7 +790,7 @@ npm run build
 ```text
 ai_chat_room/
 ├── AGENTS.md                   贡献者/编码 Agent 指南
-├── DEPLOYMENT.md               生产部署指南
+├── DEPLOYMENT.md               Docker Compose 部署指南
 ├── docker-compose.yml          Compose 服务、健康检查、数据卷
 ├── docker-compose.prod.yml     生产端口绑定覆盖
 ├── start.ps1                   Windows 一键构建/启动/等待
@@ -861,11 +884,13 @@ ai_chat_room/
 
 **Docker 构建时报 registry EOF / 拉取超时。** 这是镜像仓库网络问题。重试构建；如果持续失败，检查 Docker Desktop 的代理或镜像加速配置，然后执行 `docker compose build --pull`。
 
-**Docker 模式修改 `backend/.env` 不生效。** `docker compose restart` 不会重新读取 `env_file`。执行 `docker compose up -d` 让容器重建，或重新运行启动脚本。
+**Docker 模式修改 `backend/.env` 不生效。** `docker compose restart` 不会重新读取 `env_file`。执行 `docker compose up -d` 让容器重建，或重新运行启动脚本。注意：`LLM_*` 只在首次建库时作为种子；数据库已有配置时，改 `.env` 不会生效，请用界面 **Model settings**。
 
-**Compose 健康检查一直失败。** 执行 `docker compose logs backend`。常见原因是 `LLM_API_KEY` 格式错误、数据库卷权限问题，或修改了 `API_PREFIX` 导致健康检查仍访问 `/api/health`。
+**Compose 健康检查一直失败。** 执行 `docker compose logs backend`。常见原因是数据库卷权限问题、后端启动异常，或修改了 `API_PREFIX` 导致健康检查仍访问 `/api/health`。健康检查只要求服务能响应；错误的 API Key 不会让健康检查失败，只会让 Bot 任务失败。
 
 **Docker 模式访问 `/docs` 是空白或 404。** 确认通过 `http://localhost:8080/docs` 访问，并检查 `frontend/nginx.conf` 是否代理了 `/docs`、`/redoc` 和 `/openapi.json`；修改后需要重新构建前端。
+
+**修改模型配置后没有立即生效。** 正在运行的任务在启动时已经取了配置快照，修改只影响之后创建的任务。等当前任务结束再试；如果新任务仍失败，检查 **Model settings** 中是否已保存 Key、Base URL 和模型。`LLM_*` 环境变量不会覆盖数据库中已有的配置。
 
 **界面看不到新字段。** 前端类型和组件是后端 Schema 的手工镜像；两边都要更新并重新构建。
 
